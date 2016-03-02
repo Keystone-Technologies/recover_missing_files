@@ -7,8 +7,7 @@ my $c_report    = 100_000;
 my $files_abort = 1_000_000;
 my $images      = qr(\.tif$);
 
-die "MYSQL not defined" unless $ENV{MYSQL};
-my $mysql = Mojo::mysql->new($ENV{MYSQL});
+my $mysql = Mojo::mysql->new($ENV{MYSQL}=~/mysql/ ? $ENV{MYSQL} : "mysql://$ENV{MYSQL}:$ENV{MYSQL}@/$ENV{MYSQL}");
 my $db = $mysql->db;
 
 my $files = 0;
@@ -55,8 +54,8 @@ if ( my $table = $ARGV[0] ) {
 __DATA__
 @@ sample.data
 shuf 1395162.txt | head -100000 > sample.txt
-export R=100; shuf sample.txt | head -$R > original.txt ; shuf original.txt | head -$(echo "scale=0;$R*.9/1"|bc) > backups.txt ; shuf original.txt | head -$(echo "scale=0;$R*.8/1"|bc) > recovery.txt ; wc -l [a-z]*.txt
-for i in original.txt backups.txt recovery.txt; do date ; time perl txt2db.pl $i ; date; done
+export R=100 MYSQL=dbname; shuf sample.txt | head -$R > original.txt ; shuf original.txt | head -$(echo "scale=0;$R*.9/1"|bc) > backups.txt ; shuf original.txt | head -$(echo "scale=0;$R*.8/1"|bc) > recovery.txt ; wc -l [a-z]*.txt
+for i in original.txt backups.txt recovery.txt; do date ; time perl recover_missing_files.pl $i ; date; done
 
 @@ recovery
 -- 1 up
