@@ -35,6 +35,8 @@ if ( my $file = $ARGV[0] ) {
   # select count(*) 'missing from recovery' from original where filename not in (select filename from recovery);
   # select count(*) 'missing from backups but available in recovery' from recovery where filename in 
   #   (select filename from original where filename not in (select filename from backups)) order by d;
+  # select count(*) 'missing from backups but available in recovery', (count(*)+(select count(*) from backups))/(select count(*) from original)*100 'percent fully recovered'
+  #   from recovery where filename in (select filename from original where filename not in (select filename from backups)) order by d;
   # missing_from_backups_but_available_in_recovery
   my $recovery = $db->query('select * from recovery where filename in (select filename from original where filename not in (select filename from backups)) order by d');
   while ( my $file = $recovery->hash ) {
