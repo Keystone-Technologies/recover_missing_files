@@ -2,40 +2,30 @@ use 5.010;
 use Mojo::mysql;
 use File::Basename;
 
+my $sample      = 100_000;
+my $sample_size = 100;
 my $batch       = 25_000;
 my $c_report    = 100_000;
 my $files_abort = 1_000_000;
 my $images      = qr(\.tif$);
 
+die "MYSQL not defined\n" unless $ENV{MYSQL};
 my $mysql = Mojo::mysql->new($ENV{MYSQL}=~/mysql/ ? $ENV{MYSQL} : "mysql://$ENV{MYSQL}:$ENV{MYSQL}@/$ENV{MYSQL}");
 my $db = $mysql->db;
 
-my $files = 0;
-my $c = 0;
-if ( my $table = $ARGV[0] ) {
-  $table =~ s/\.\w+$//;
-  $mysql->migrations->name($table)->from_data->migrate;
-  $db->query("delete from $table");
-  $db->query("alter table $table auto_increment = 1");
-  @_ = ();
-  while ( <> ) {
-    printf "%08d | %08d\n", $c, $files if $c % $c_report == 0;
-    $c++;
-    s/\s*$//;
-    next if /\\$/;
-    my ($date) = (/\\(\d{8})\\/);
-    my ($path, $file) = (/(.+\\)(.+)/);
-    next unless $date && $file =~ $images;
-    push @_, $date, ($path||''), ($file||'');
-    next unless $#_ == $batch*3-1;
-    my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
-    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
-    @_ = ();
-    last if $ENV{ABORT} && $files >= $files_abort;
-  }
-  if ( @_ ) {
-    my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
-    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
+if ( $ENV{SAMPLE} ) {
+  if ( -e $ENV{SAMPLE} ) {
+    $ENV{SAMPLE_SIZE} ||= $sample_size;
+    sample($ENV{SAMPLE}, $sample, 'sample.txt');
+    sample('sample.txt', $ENV{SAMPLE_SIZE}, 'original.txt');
+    sample('original.txt', $ENV{SAMPLE_SIZE}*.9, 'backups.txt');
+    sample('original.txt', $ENV{SAMPLE_SIZE}*.8, 'recovery.txt');
+    print qx(wc -l [a-z]*.txt);
+    foreach (qw(original.txt backups.txt recovery.txt)) {
+      say scalar localtime;
+      load($_);
+      say scalar localtime;
+    }
   }
 } else {
   # select 'original' t,count(*) c from original union select 'backups' t,count(*) c  from backups union select 'recovery' t,count(*) c  from recovery;
@@ -51,12 +41,64 @@ if ( my $table = $ARGV[0] ) {
   }
 }
 
-__DATA__
-@@ sample.data
-shuf 1395162.txt | head -100000 > sample.txt
-export R=100 MYSQL=dbname; shuf sample.txt | head -$R > original.txt ; shuf original.txt | head -$(echo "scale=0;$R*.9/1"|bc) > backups.txt ; shuf original.txt | head -$(echo "scale=0;$R*.8/1"|bc) > recovery.txt ; wc -l [a-z]*.txt
-for i in original.txt backups.txt recovery.txt; do date ; time perl recover_missing_files.pl $i ; date; done
+sub sample {
+  my ($in, $count, $out) = @_;
+  $count = int($count);
 
+  my $size = -s $in;
+
+  open(IN,$in) || die "Can't open $in\n";
+  open(OUT,">$out") || die "Can't open $out\n";
+
+  while ($count--) {
+    printf "%08d\r", $count;
+    seek(IN,int(rand($size)),0);
+    $_=readline(IN);                         # ignore partial line
+    redo unless defined ($_ = readline(IN)); # catch EOF
+    print OUT $_;
+  }
+  print "\n";
+
+  close OUT;
+  close IN;
+}
+
+sub load {
+  my $file = shift;
+  my $table = $file;
+  $table =~ s/\.\w+$//;
+  my $files = 0;
+  my $c = 0;
+  $mysql->migrations->name($table)->from_data->migrate;
+  $db->query("delete from $table");
+  $db->query("alter table $table auto_increment = 1");
+  local @_ = ();
+  open IN, $file;
+  while ( local $_ = <IN> ) {
+    printf "%08d | %08d\r", $c, $files if !$c || $c % $c_report == 0;
+    $c++;
+    s/\s*$//;
+    next if /\\$/;
+    my ($date) = (/\\(\d{8})\\/);
+    my ($path, $file) = (/(.+\\)(.+)/);
+    next unless $date && $file =~ $images;
+    push @_, $date, ($path||''), ($file||'');
+    next unless $#_ == $batch*3-1;
+    my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
+    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
+    @_ = ();
+    last if $ENV{ABORT} && $files >= $files_abort;
+  }
+  close IN;
+  if ( @_ ) {
+    printf "%08d | %08d\r", $c, $files;
+    my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
+    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
+  }
+  print "\n";
+}
+
+__DATA__
 @@ recovery
 -- 1 up
 create table recovery (id int primary key auto_increment, d date, path varchar(1024), filename varchar(64), mtime datetime, size int, status enum('san', 'usb', 'missing'));
