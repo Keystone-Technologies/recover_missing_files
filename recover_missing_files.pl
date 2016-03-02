@@ -1,31 +1,33 @@
 use 5.010;
 use Mojo::mysql;
 use File::Basename;
+use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
+use Time::HiRes qw(gettimeofday tv_interval);
 
-my $sample      = 100_000;
-my $sample_size = 100;
-my $batch       = 25_000;
-my $c_report    = 100_000;
-my $files_abort = 1_000_000;
-my $images      = qr(\.tif$);
+my $images = qr(\.tif$);
+
+GetOptions(
+  'S=i' => \(my $S = 100_000),  # Grab a sampling of the full data set
+  's=i' => \my $s,              # Create a sampling of that sampling
+  'a=i' => \my $files_abort,    # Max records to process
+);
 
 die "MYSQL not defined\n" unless $ENV{MYSQL};
 my $mysql = Mojo::mysql->new($ENV{MYSQL}=~/mysql/ ? $ENV{MYSQL} : "mysql://$ENV{MYSQL}:$ENV{MYSQL}@/$ENV{MYSQL}");
 my $db = $mysql->db;
 
-if ( $ENV{SAMPLE} ) {
-  if ( -e $ENV{SAMPLE} ) {
-    $ENV{SAMPLE_SIZE} ||= $sample_size;
-    sample($ENV{SAMPLE}, $sample, 'sample.txt');
-    sample('sample.txt', $ENV{SAMPLE_SIZE}, 'original.txt');
-    sample('original.txt', $ENV{SAMPLE_SIZE}*.9, 'backups.txt');
-    sample('original.txt', $ENV{SAMPLE_SIZE}*.8, 'recovery.txt');
-    print qx(wc -l [a-z]*.txt);
-    foreach (qw(original.txt backups.txt recovery.txt)) {
-      say scalar localtime;
-      load($_);
-      say scalar localtime;
+if ( my $file = $ARGV[0] ) {
+  if ( $s ) {
+    if ( -e $file ) {
+      sample($file, $S, 'sample.txt');
+      sample('sample.txt', $s, 'original.txt');
+      sample('original.txt', $s*.9, 'backups.txt');
+      sample('original.txt', $s*.8, 'recovery.txt');
+      print qx(wc -l [a-z]*.txt);
+      foreach my $file (qw(original.txt backups.txt recovery.txt)) { load($file) }
     }
+  } elsif ( $file =~ /(original|backups|recovery)/ ) {
+    load($file);
   }
 } else {
   # select 'original' t,count(*) c from original union select 'backups' t,count(*) c  from backups union select 'recovery' t,count(*) c  from recovery;
@@ -50,8 +52,9 @@ sub sample {
   open(IN,$in) || die "Can't open $in\n";
   open(OUT,">$out") || die "Can't open $out\n";
 
+  print "$in ($count) > $out\n";
   while ($count--) {
-    printf "%08d\r", $count;
+    printf "  %08d\r", $count;
     seek(IN,int(rand($size)),0);
     $_=readline(IN);                         # ignore partial line
     redo unless defined ($_ = readline(IN)); # catch EOF
@@ -65,6 +68,7 @@ sub sample {
 
 sub load {
   my $file = shift;
+  my $start = [gettimeofday];
   my $table = $file;
   $table =~ s/\.\w+$//;
   my $files = 0;
@@ -74,8 +78,12 @@ sub load {
   $db->query("alter table $table auto_increment = 1");
   local @_ = ();
   open IN, $file;
+  1 while <IN>;
+  my $batch = int($.*.1);
+  seek(IN,0,0);
+  print "$file\n";
   while ( local $_ = <IN> ) {
-    printf "%08d | %08d\r", $c, $files if !$c || $c % $c_report == 0;
+    printf "  %08d | %08d (%s)\r", $c, $files, tv_interval($start) if $c % int($batch*.1) == 0;
     $c++;
     s/\s*$//;
     next if /\\$/;
@@ -85,13 +93,13 @@ sub load {
     push @_, $date, ($path||''), ($file||'');
     next unless $#_ == $batch*3-1;
     my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
-    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
+    $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id - 1;
     @_ = ();
-    last if $ENV{ABORT} && $files >= $files_abort;
+    last if $files >= $files_abort;
   }
   close IN;
   if ( @_ ) {
-    printf "%08d | %08d\r", $c, $files;
+    printf "  %08d | %08d (%s)\r", $c, $files, tv_interval($start);
     my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
     $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id;
   }
