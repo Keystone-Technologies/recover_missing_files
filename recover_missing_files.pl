@@ -95,7 +95,7 @@ sub load {
     my $values = join ',', map { '(?,?,?)' } 0..$#_/3;
     $files = $db->query("insert into $table (d, path, filename) values $values", @_)->last_insert_id - 1;
     @_ = ();
-    last if $files >= $files_abort;
+    last if $files_abort && $files >= $files_abort;
   }
   close IN;
   if ( @_ ) {
