@@ -7,7 +7,7 @@ use Time::HiRes qw(gettimeofday tv_interval);
 my $images = qr(\.tif$);
 
 GetOptions(
-  'S=i' => \(my $S = 100_000),  # Grab a sampling of the full data set
+  'S=i' => \my $S,  # Grab a sampling of the full data set
   's=i' => \my $s,              # Create a sampling of that sampling
   'a=i' => \my $files_abort,    # Max records to process
 );
@@ -17,16 +17,16 @@ my $mysql = Mojo::mysql->new($ENV{MYSQL}=~/mysql/ ? $ENV{MYSQL} : "mysql://$ENV{
 my $db = $mysql->db;
 
 if ( my $file = $ARGV[0] ) {
-  if ( $s ) {
-    if ( -e $file ) {
-      sample($file, $S, 'sample.txt');
+  if ( $file !~ /(original|backups|recovery)/ ) {
+    sample($file, $S, 'sample.txt') if $S;
+    if ( -e 'sample.txt' && $s ) {
       sample('sample.txt', $s, 'original.txt');
       sample('original.txt', $s*.9, 'backups.txt');
       sample('original.txt', $s*.8, 'recovery.txt');
       print qx(wc -l [a-z]*.txt);
       foreach my $file (qw(original.txt backups.txt recovery.txt)) { load($file) }
     }
-  } elsif ( $file =~ /(original|backups|recovery)/ ) {
+  } else {
     load($file);
   }
 } else {
@@ -47,6 +47,7 @@ if ( my $file = $ARGV[0] ) {
 
 sub sample {
   my ($in, $count, $out) = @_;
+  return unless -e $in;
   $count = int($count);
 
   my $size = -s $in;
@@ -70,6 +71,7 @@ sub sample {
 
 sub load {
   my $file = shift;
+  return unless -e $file;
   my $start = [gettimeofday];
   my $table = $file;
   $table =~ s/\.\w+$//;
